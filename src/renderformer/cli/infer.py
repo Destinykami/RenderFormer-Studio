@@ -18,6 +18,24 @@ if TYPE_CHECKING:
     import torch
 
 
+def _musa_available() -> bool:
+    """Return True when a MUSA device is usable.
+
+    ``torch.cuda.is_available()`` is False on Moore Threads hardware, so the
+    automatic device choice has to consult ``torch.musa`` explicitly. Importing
+    ``torch_musa`` registers that namespace.
+    """
+
+    try:
+        import torch_musa  # noqa: F401
+    except ImportError:
+        return False
+    import torch
+
+    musa = getattr(torch, "musa", None)
+    return bool(musa is not None and musa.is_available())
+
+
 def _device_from_arg(value: str) -> torch.device:
     import torch
 
@@ -27,6 +45,8 @@ def _device_from_arg(value: str) -> torch.device:
         return torch.device("cuda")
     if torch.backends.mps.is_available():
         return torch.device("mps")
+    if _musa_available():
+        return torch.device("musa")
     return torch.device("cpu")
 
 

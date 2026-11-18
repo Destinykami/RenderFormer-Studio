@@ -145,7 +145,7 @@ class ViewTransformer(nn.Module):
 
         # do per-ray attention
         if self.config.use_dpt_decoder:
-            with torch.autocast(device_type="cuda", dtype=torch.float32 if tf32_mode else torch.bfloat16):
+            with torch.autocast(device_type=ray_tokens.device.type, dtype=torch.float32 if tf32_mode else torch.bfloat16):
                 out_features = self.transformer(ray_tokens, tri_tokens, src_key_padding_mask=valid_mask, triangle_pos=tri_pos, ray_pos=ray_token_pos, out_layers=self.out_layers, tf32_mode=tf32_mode, patch_h=patch_h, patch_w=patch_w, use_indices=use_indices, num_register_tokens=self.config.num_register_tokens, env_token_num=env_token_num, deepstack_texture_embs=deepstack_texture_embs, triangle_valid_mask=triangle_valid_mask, light_token_mask=light_token_mask)
             decoded_img = self.out_dpt(out_features, patch_h, patch_w, patch_size=self.config.patch_size)
             return self.out_proj_act(decoded_img)

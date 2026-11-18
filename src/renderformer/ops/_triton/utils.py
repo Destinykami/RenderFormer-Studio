@@ -70,11 +70,32 @@ def compare_version(package: str, operator: Callable, target: str):
     return operator(pkg_version, Version(target))
 
 
+def _amp_device_type() -> str:
+    """Device type bound to the AMP custom-fwd/bwd decorators.
+
+    Torch's AMP decorators take one device type at decoration time, so resolve
+    it once: CUDA where available, MUSA on Moore Threads hardware, and CUDA as
+    the historical default otherwise. Without this the decorators stay bound to
+    ``cuda`` and silently stop casting on other accelerators.
+    """
+
+    if torch.cuda.is_available():
+        return "cuda"
+    try:
+        import torch_musa  # noqa: F401  (registers torch.musa)
+    except ImportError:
+        return "cuda"
+    if torch.musa.is_available():
+        return "musa"
+    return "cuda"
+
+
 def get_amp_custom_fwd_bwd() -> Callable:
     if compare_version("torch", operator.ge, "2.4.0"):
+        device_type = _amp_device_type()
         return (
-            functools.partial(torch.amp.custom_fwd, device_type="cuda"),
-            functools.partial(torch.amp.custom_bwd, device_type="cuda"),
+            functools.partial(torch.amp.custom_fwd, device_type=device_type),
+            functools.partial(torch.amp.custom_bwd, device_type=device_type),
         )
     return torch.cuda.amp.custom_fwd, torch.cuda.amp.custom_bwd
 
