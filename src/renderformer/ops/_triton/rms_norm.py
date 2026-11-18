@@ -270,6 +270,13 @@ def rms_norm_backward(
         sm_count = torch.cuda.get_device_properties(X.device).multi_processor_count
     elif X.device.type == "xpu":
         sm_count = torch.xpu.get_device_properties(X.device).gpu_subslice_count
+    elif X.device.type == "musa":
+        sm_count = torch.musa.get_device_properties(X.device).multi_processor_count
+    else:
+        raise RuntimeError(
+            "rms_norm_backward does not support device type "
+            f"{X.device.type!r}"
+        )
 
     # fp32 for numerical stability especially.
     _dW = torch.empty((sm_count, n_cols), dtype=torch.float32, device=W.device)
