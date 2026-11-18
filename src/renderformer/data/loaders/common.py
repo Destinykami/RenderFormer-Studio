@@ -16,6 +16,40 @@ from natsort import natsorted
 from .config import TriangleRenderH5DatasetConfig
 
 
+class DeviceBatchIterator:
+    """Serve PyTorch loader batches with the contract the trainers expect.
+
+    The released entrypoints were written against ``TriangleRenderDALIDataset``,
+    which yields dictionaries of *device* tensors from an endless iterator. A
+    plain ``DataLoader`` yields CPU tensors and stops after one epoch, so this
+    adapter moves every tensor to ``device`` and restarts the loader.
+
+    This exists so the CUDA-only NVIDIA DALI backend can be replaced by the
+    bundled PyTorch H5 dataset on hosts where DALI is unavailable.
+    """
+
+    def __init__(self, dataloader, device: "torch.device"):
+        self.dataloader = dataloader
+        self.device = device
+
+    def __len__(self) -> int:
+        return len(self.dataloader.dataset)
+
+    def __iter__(self):
+        while True:
+            produced = False
+            for batch in self.dataloader:
+                produced = True
+                yield {
+                    key: value.to(self.device, non_blocking=True)
+                    if torch.is_tensor(value)
+                    else value
+                    for key, value in batch.items()
+                }
+            if not produced:
+                raise RuntimeError("the wrapped dataloader produced no batches")
+
+
 def read_list_or_dir(path: str) -> List[str]:
     """Resolve a metadata list, or a directory for legacy CLI compatibility."""
 

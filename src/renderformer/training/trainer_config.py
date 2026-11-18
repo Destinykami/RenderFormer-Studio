@@ -11,6 +11,9 @@ class TrainerConfig:
     batch_size: int = 8
     num_view_limit: int = 2
     num_workers: int = 24
+    # H5 loader backend: "auto" prefers NVIDIA DALI and falls back to the bundled
+    # PyTorch dataset, "dali" requires DALI, "pytorch" never uses it.
+    dataloader_type: Literal["auto", "dali", "pytorch"] = "auto"
     img_resolution: int = 256
     crop_size: int | None = None
     use_aug: bool = True

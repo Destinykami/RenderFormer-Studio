@@ -32,7 +32,7 @@ from renderformer.models.aug import aug_triangles_and_camera, trans_to_cam_coord
 from renderformer.models.ray_generator import RayGenerator
 from renderformer.models.tri_utils import compute_triangle_area
 from renderformer.ops.apply_kernels import apply_kernels
-from renderformer.data.loaders.v1 import TriangleRenderDALIDataset
+from renderformer.data.loaders.v1 import create_v1_training_dataloader
 from renderformer.training.cli_helper import preload_config_file_from_args
 from renderformer.training.gradient_accumulation import (
     validate_v1_gradient_accumulation_steps,
@@ -101,15 +101,15 @@ def main() -> None:
     model, optimizer, scheduler = accelerator.prepare(
         model, optimizer, scheduler
     )
-    dataloader = TriangleRenderDALIDataset(
+    dataloader = create_v1_training_dataloader(
         config.dataset_config,
         batch_size=config.trainer_config.batch_size,
         num_view_limit=config.trainer_config.num_view_limit,
         num_workers=config.trainer_config.num_workers,
         num_threads=max(get_total_cpus() // (accelerator.num_processes * config.trainer_config.num_workers), 4),
-        # num_threads=config.trainer_config.num_workers * 4,
-        device_id=accelerator.device.index,
-        single_value_texture=config.model_config.texture_encode_patch_size == 1  # for single value reflectance
+        device=accelerator.device,
+        single_value_texture=config.model_config.texture_encode_patch_size == 1,  # for single value reflectance
+        dataloader_type=config.trainer_config.dataloader_type,
     )
 
     # seed everything

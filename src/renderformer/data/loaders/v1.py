@@ -12,6 +12,7 @@ import torch
 from torch.utils.data import Dataset
 
 from .common import (
+    DeviceBatchIterator,
     load_camera_arrays,
     load_geometry_arrays,
     load_texture_array,
@@ -238,6 +239,69 @@ class TriangleRenderDALIDataset:
         print(f"Refreshed V1 file list: {len(self.file_list)} files", flush=True)
 
 
+def create_v1_training_dataloader(
+    config: TriangleRenderH5DatasetConfig,
+    *,
+    batch_size: int,
+    num_view_limit: int,
+    num_workers: int,
+    device,
+    num_threads: int = 16,
+    single_value_texture: bool = False,
+    dataloader_type: str = "auto",
+):
+    """Build the RF1 training loader, preferring DALI when it is installed.
+
+    ``dataloader_type`` selects the backend:
+
+    - ``auto``: NVIDIA DALI when importable, otherwise the bundled PyTorch
+      dataset (both yield device tensors, so the training loop is unchanged);
+    - ``dali``: require DALI and fail if it is missing;
+    - ``pytorch``: always use the PyTorch dataset.
+
+    DALI is CUDA-only, so hosts without an NVIDIA GPU stack use the PyTorch
+    backend.
+    """
+
+    kind = str(dataloader_type).lower()
+    if kind not in {"auto", "dali", "pytorch"}:
+        raise ValueError(
+            "dataloader_type must be 'auto', 'dali', or 'pytorch'; "
+            f"got {dataloader_type!r}"
+        )
+
+    if kind != "pytorch" and dali is not None:
+        return TriangleRenderDALIDataset(
+            config,
+            batch_size=batch_size,
+            num_view_limit=num_view_limit,
+            single_value_texture=single_value_texture,
+            num_threads=num_threads,
+            num_workers=num_workers,
+            device_id=getattr(device, "index", None),
+        )
+    if kind == "dali":
+        require_dali()
+
+    from torch.utils.data import DataLoader
+
+    dataset = TriangleRenderH5Dataset(config, limit_num_views=num_view_limit)
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        shuffle=False,
+        drop_last=True,
+        persistent_workers=num_workers > 0,
+    )
+    if kind == "auto":
+        print(
+            "NVIDIA DALI is unavailable; using the bundled PyTorch H5 loader",
+            flush=True,
+        )
+    return DeviceBatchIterator(loader, device)
+
+
 def create_dataloader(
     dataloader_type: str,
     config: TriangleRenderH5DatasetConfig,
@@ -282,5 +346,6 @@ __all__ = [
     "TriangleRenderH5Dataset",
     "TriangleRenderH5DatasetConfig",
     "create_dataloader",
+    "create_v1_training_dataloader",
     "load_v1_numpy_sample",
 ]
