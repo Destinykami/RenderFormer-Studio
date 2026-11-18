@@ -23,9 +23,14 @@ EPS = 1e-6
 ATTN = os.environ.get("ATTN_IMPL", "flash_attn")
 if os.environ.get("USE_SDPA", "0") == "1":
     ATTN = "sdpa"
-if ATTN not in {"flash_attn", "sdpa"}:
-    raise ValueError("ATTN_IMPL must be either 'flash_attn' or 'sdpa'")
+if ATTN not in {"flash_attn", "flash_attn_3", "sdpa"}:
+    raise ValueError(
+        "ATTN_IMPL must be one of 'flash_attn', 'flash_attn_3', or 'sdpa'"
+    )
 
+# flash-attn v3 exposes an unpacked ``flash_attn_varlen_func`` only; the packed
+# v2 entry points above are absent. Track which API the calls below must use.
+FLASH_V3 = False
 if ATTN == "flash_attn":
     try:
         from flash_attn import (
@@ -41,7 +46,34 @@ if ATTN == "flash_attn":
             flush=True,
         )
         ATTN = "sdpa"
+elif ATTN == "flash_attn_3":
+    try:
+        from flash_attn_3.interface import flash_attn_func, flash_attn_varlen_func
+        from flash_attn.bert_padding import pad_input, unpad_input
+        FLASH_V3 = True
+    except ImportError:
+        print(
+            "flash-attn v3 is unavailable; falling back to PyTorch SDPA. "
+            "Install flash_attn_3 for accelerated training and inference.",
+            flush=True,
+        )
+        ATTN = "sdpa"
 # print('Using attention type: ', ATTN)
+
+if ATTN in {"flash_attn", "flash_attn_3"}:
+
+    def _unpad_input(flat_states, attention_mask):
+        """Return the four public ``unpad_input`` outputs.
+
+        Upstream flash-attn returns ``(x_unpad, indices, cu_seqlens,
+        max_seqlen_in_batch)``, while some builds append a fifth value. The
+        padded legacy path discards that tail, so normalize the arity here
+        instead of hard-coding one build's signature at every call site.
+        """
+
+        unpadded = unpad_input(flat_states, attention_mask)
+        return unpadded[0], unpadded[1], unpadded[2], unpadded[3]
+
 
 if os.environ.get('DISABLE_FLEX_COMPILE', '0') == '1':
     print('Disabling flex-attention compile, will be slower')
@@ -242,14 +274,20 @@ class MultiHeadAttention(nn.Module):
                 enable_gqa=self.is_gqa,
             ).transpose(1, 2).contiguous().view(bs, src_len, -1)
             # TODO: local attention for SDPA
-        elif ATTN == 'flash_attn':
+        elif ATTN in {'flash_attn', 'flash_attn_3'}:
             # self-attn
             if self.is_self_attn:
                 if src_key_padding_mask is not None:
-                    q_unpad, indices_q, cu_seqlens_q, max_seqlen_q, _ = unpad_input(q.transpose(1, 2), src_key_padding_mask)
-                    k_unpad, indices_k, cu_seqlens_k, max_seqlen_k, _ = unpad_input(k.transpose(1, 2), src_key_padding_mask)
-                    v_unpad, indices_v, cu_seqlens_v, max_seqlen_v, _ = unpad_input(v.transpose(1, 2), src_key_padding_mask)
-                    if not self.is_gqa:
+                    q_unpad, indices_q, cu_seqlens_q, max_seqlen_q = _unpad_input(q.transpose(1, 2), src_key_padding_mask)
+                    k_unpad, indices_k, cu_seqlens_k, max_seqlen_k = _unpad_input(k.transpose(1, 2), src_key_padding_mask)
+                    v_unpad, indices_v, cu_seqlens_v, max_seqlen_v = _unpad_input(v.transpose(1, 2), src_key_padding_mask)
+                    if FLASH_V3:
+                        out_unpad = flash_attn_varlen_func(
+                            q_unpad, k_unpad, v_unpad,
+                            cu_seqlens_q, cu_seqlens_q, max_seqlen_q, max_seqlen_q,
+                            window_size=(self.local_attention_window_size_half, self.local_attention_window_size_half),
+                        )
+                    elif not self.is_gqa:
                         qkv_unpad = torch.stack([q_unpad, k_unpad, v_unpad], dim=1)
                         out_unpad = flash_attn_varlen_qkvpacked_func(
                             qkv_unpad, cu_seqlens_q, max_seqlen_q,
@@ -262,6 +300,13 @@ class MultiHeadAttention(nn.Module):
                             window_size=(self.local_attention_window_size_half, self.local_attention_window_size_half)
                         )
                     attn_output = pad_input(out_unpad, indices_q, bs, src_len).contiguous().view(bs, src_len, -1)
+                elif FLASH_V3:
+                    attn_output = flash_attn_func(
+                        q.transpose(1, 2),
+                        k.transpose(1, 2),
+                        v.transpose(1, 2),
+                        window_size=(self.local_attention_window_size_half, self.local_attention_window_size_half),
+                    ).contiguous().view(bs, src_len, -1)
                 else:
                     qkv = torch.stack([
                         q.transpose(1, 2),
@@ -280,13 +325,19 @@ class MultiHeadAttention(nn.Module):
                 )
                 max_seqlen_q = src_len
 
-                k_unpad, indices_k, cu_seqlens_k, max_seqlen_k, _ = unpad_input(k.transpose(1, 2), src_key_padding_mask)
-                v_unpad, _, _, _, _ = unpad_input(v.transpose(1, 2), src_key_padding_mask)
+                k_unpad, indices_k, cu_seqlens_k, max_seqlen_k = _unpad_input(k.transpose(1, 2), src_key_padding_mask)
+                v_unpad, _, _, _ = _unpad_input(v.transpose(1, 2), src_key_padding_mask)
 
-                kv_unpad = torch.stack([k_unpad, v_unpad], dim=1)
-                out_unpad = flash_attn_varlen_kvpacked_func(
-                    q_unpad, kv_unpad, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
-                )
+                if FLASH_V3:
+                    out_unpad = flash_attn_varlen_func(
+                        q_unpad, k_unpad, v_unpad,
+                        cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
+                    )
+                else:
+                    kv_unpad = torch.stack([k_unpad, v_unpad], dim=1)
+                    out_unpad = flash_attn_varlen_kvpacked_func(
+                        q_unpad, kv_unpad, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
+                    )
                 attn_output = rearrange(
                     out_unpad, "(b s) h d -> b s h d", b=bs
                 ).contiguous().view(bs, src_len, -1)
@@ -347,8 +398,18 @@ class MultiHeadAttention(nn.Module):
             v = v.repeat_interleave(self.num_head_per_group, dim=1)
 
         # Use flash attention varlen
-        if ATTN == 'flash_attn':
-            if self.is_self_attn and not self.is_gqa:
+        if ATTN in {'flash_attn', 'flash_attn_3'}:
+            if FLASH_V3:
+                window = (
+                    (self.local_attention_window_size_half, self.local_attention_window_size_half)
+                    if self.local_attention_window_size_half > 0
+                    else (-1, -1)
+                )
+                out = flash_attn_varlen_func(
+                    q, k, v, cu_seqlens, cu_seqlens, max_seqlen, max_seqlen,
+                    window_size=window,
+                )
+            elif self.is_self_attn and not self.is_gqa:
                 qkv = torch.stack([q, k, v], dim=1)  # [total_tokens, 3, num_heads, head_dim]
                 if self.local_attention_window_size_half > 0:
                     out = flash_attn_varlen_qkvpacked_func(
@@ -910,26 +971,34 @@ class AttentionLayer(nn.Module):
             k = apply_rotary_emb_one_cossin(k, rope_ctx_cos_k, rope_ctx_sin_k)
 
         # Flash attention varlen cross
-        if ATTN == 'flash_attn':
-            # For GQA, repeat k and v
-            if self.multihead_attn.is_gqa:
-                k = k.repeat_interleave(self.multihead_attn.num_head_per_group, dim=1)
-                v = v.repeat_interleave(self.multihead_attn.num_head_per_group, dim=1)
-            
-            kv = torch.stack([k, v], dim=1)  # [total_context, 2, num_heads, head_dim]
-            out = flash_attn_varlen_kvpacked_func(
-                q=q,
-                kv=kv,
-                cu_seqlens_q=cu_seqlens_q,
-                cu_seqlens_k=cu_seqlens_k,
-                max_seqlen_q=max_seqlen_q,
-                max_seqlen_k=max_seqlen_k,
-                dropout_p=0.0,
-                softmax_scale=1.0 / math.sqrt(self.multihead_attn.head_dim),
-                causal=False,
-            )
+        if ATTN in {'flash_attn', 'flash_attn_3'}:
+            if FLASH_V3:
+                out = flash_attn_varlen_func(
+                    q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
+                    softmax_scale=1.0 / math.sqrt(self.multihead_attn.head_dim),
+                )
+            else:
+                # For GQA, repeat k and v
+                if self.multihead_attn.is_gqa:
+                    k = k.repeat_interleave(self.multihead_attn.num_head_per_group, dim=1)
+                    v = v.repeat_interleave(self.multihead_attn.num_head_per_group, dim=1)
+
+                kv = torch.stack([k, v], dim=1)  # [total_context, 2, num_heads, head_dim]
+                out = flash_attn_varlen_kvpacked_func(
+                    q=q,
+                    kv=kv,
+                    cu_seqlens_q=cu_seqlens_q,
+                    cu_seqlens_k=cu_seqlens_k,
+                    max_seqlen_q=max_seqlen_q,
+                    max_seqlen_k=max_seqlen_k,
+                    dropout_p=0.0,
+                    softmax_scale=1.0 / math.sqrt(self.multihead_attn.head_dim),
+                    causal=False,
+                )
         else:
-            raise NotImplementedError("varlen cross attention only supports flash_attn for now")
+            raise NotImplementedError(
+                "varlen cross attention only supports flash_attn for now"
+            )
 
         out = out.view(B, num_queries, D)
         out = self.multihead_attn.out_proj(out)
