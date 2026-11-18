@@ -83,7 +83,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=2.0 / 255.0,
     )
-    parser.add_argument("--device", default="cuda", help="cpu, cuda, or cuda:N.")
+    parser.add_argument(
+        "--device",
+        default="auto",
+        help=(
+            "auto, cpu, cuda, cuda:N, or musa (MUSA: also accepts musa:N). "
+            "'auto' picks cuda, then musa, then cpu."
+        ),
+    )
     initialization = parser.add_mutually_exclusive_group()
     initialization.add_argument(
         "--resume",
@@ -479,11 +486,36 @@ def _save_pretrained_bundle(
     _atomic_json(path / "preprocessor_config.json", preprocessor.to_dict())
 
 
+def _musa_available() -> bool:
+    """Return True when a MUSA device is usable (importing torch_musa registers it)."""
+
+    try:
+        import torch_musa  # noqa: F401
+    except ImportError:
+        return False
+    musa = getattr(torch, "musa", None)
+    return bool(musa is not None and musa.is_available())
+
+
+def _resolve_device(value: str) -> torch.device:
+    """Resolve ``auto`` to the best available accelerator, else parse ``value``."""
+
+    if value != "auto":
+        return torch.device(value)
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if _musa_available():
+        return torch.device("musa")
+    return torch.device("cpu")
+
+
 def _setup_distributed(args: argparse.Namespace) -> tuple[int, int, int, torch.device, Any]:
     if not args.ddp:
-        device = torch.device(args.device)
+        device = _resolve_device(args.device)
         if device.type == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")
+        if device.type == "musa" and not _musa_available():
+            raise RuntimeError("MUSA was requested but torch.musa.is_available() is false")
         return 0, 1, 0, device, None
 
     missing = [name for name in ("RANK", "WORLD_SIZE", "LOCAL_RANK") if name not in os.environ]
@@ -497,10 +529,21 @@ def _setup_distributed(args: argparse.Namespace) -> tuple[int, int, int, torch.d
             f"invalid distributed ranks: rank={rank}, world_size={world_size}, "
             f"local_rank={local_rank}"
         )
-    if args.device == "cpu":
+    requested_device = _resolve_device(args.device)
+    if requested_device.type == "cpu":
         device = torch.device("cpu")
         backend = "gloo"
-    else:
+    elif requested_device.type == "musa":
+        if not _musa_available():
+            raise RuntimeError("DDP MUSA was requested but torch.musa.is_available() is false")
+        if local_rank >= torch.musa.device_count():
+            raise ValueError(
+                f"LOCAL_RANK={local_rank} exceeds {torch.musa.device_count()} MUSA devices"
+            )
+        torch.musa.set_device(local_rank)
+        device = torch.device("musa", local_rank)
+        backend = "mccl"
+    elif requested_device.type == "cuda":
         if not torch.cuda.is_available():
             raise RuntimeError("DDP CUDA was requested but CUDA is unavailable")
         if local_rank >= torch.cuda.device_count():
@@ -510,6 +553,10 @@ def _setup_distributed(args: argparse.Namespace) -> tuple[int, int, int, torch.d
         torch.cuda.set_device(local_rank)
         device = torch.device("cuda", local_rank)
         backend = "nccl"
+    else:
+        raise ValueError(
+            f"DDP supports cpu, cuda, or musa devices; got {args.device!r}"
+        )
     import torch.distributed as distributed
 
     distributed.init_process_group(backend=backend, init_method="env://")
