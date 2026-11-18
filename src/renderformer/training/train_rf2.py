@@ -461,6 +461,13 @@ def main() -> None:
 
         maybe_save_ckpt(accelerator, output_dir, config, global_step)
 
+    # Tear the process group down explicitly: without this, ranks exit with
+    # the MCCL communicator still alive and pending collectives surface as
+    # "unhandled system error" async exceptions on exit.
+    accelerator.wait_for_everyone()
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
+
 
 if __name__ == "__main__":
     main()
