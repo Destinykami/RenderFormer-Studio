@@ -1,0 +1,35 @@
+# Pinned Python dependencies for RenderFormer on MUSA (Python 3.10).
+#
+# Designed to layer cleanly on top of a TorchMUSA base image that already ships
+# torch, torch_musa, triton, transformers, huggingface-hub (<1.0), accelerate,
+# einops, safetensors, numpy, pyyaml, and wandb.
+#
+# Install with `--no-deps` so pip does not overwrite the preinstalled TorchMUSA
+# stack or upgrade huggingface-hub past 1.0:
+#   python -m pip install --no-deps --no-cache-dir -r docker/requirements-musa.txt
+#
+# Install flash_attn_3, mate, and optional mate-mubin in separate commands from
+# the official MUSA PyPI index (do not mix indices in a single pip invocation):
+#   pip install flash_attn_3 --index-url https://dl.mthreads.com/repo/api/pypi/pypi/simple
+#   pip install mate --index-url https://dl.mthreads.com/repo/api/pypi/pypi/simple
+#   pip install mate-mubin --index-url https://dl.mthreads.com/repo/api/pypi/pypi/simple
+
+dacite==1.9.2
+diffusers==0.35.1
+h5py==3.16.0
+imageio==2.38.0
+jaxtyping==0.3.7
+json-spec==0.12.0
+jsoncomment==0.4.2
+lightning-utilities==0.15.3
+lpips==0.1.4
+natsort==8.4.0
+openexr==3.5.2
+pytorch-msssim==1.0.0
+roma==1.8.0
+shtab==1.13.0
+simple-exr==0.0.0
+torchmetrics==1.9.0
+typeguard==4.6.0
+tyro==0.9.35
+wadler-lindig==0.1.8

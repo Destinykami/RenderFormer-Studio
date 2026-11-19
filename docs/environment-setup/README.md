@@ -25,6 +25,42 @@ This environment targets Linux with an NVIDIA driver compatible with CUDA
 12.6. Use it for training, V1 CUDA/Triton kernels, DALI, and any V2 execution
 profile that enables packed sequences.
 
+## MUSA inference and training
+
+On Moore Threads MUSA GPUs, start from a TorchMUSA Python 3.10 environment
+(for example `sh-harbor.mthreads.com/mcctest/training-suite:v2.1.7-rc4`, which
+already provides `torch`, `torch_musa`, `triton`, `transformers`,
+`huggingface-hub<1.0`, `accelerate`, `einops`, `safetensors`, `numpy`,
+`pyyaml`, and `wandb`).
+
+Install the RenderFormer dependencies with `--no-deps` so the preinstalled
+TorchMUSA stack is preserved, then install FA3 / MATE from the MUSA wheel index
+in separate commands:
+
+```bash
+# 1. Install RenderFormer dependencies (without overwriting TorchMUSA / transformers)
+python -m pip install --no-deps --no-cache-dir -r docker/requirements-musa.txt
+
+# 2. Install FA3 / MATE (required for ATTN_IMPL=flash_attn_3; optional for USE_SDPA=1)
+# Install FA3
+pip install flash_attn_3 --index-url https://dl.mthreads.com/repo/api/pypi/pypi/simple
+
+# Install MATE
+pip install mate --index-url https://dl.mthreads.com/repo/api/pypi/pypi/simple
+
+# Install Optional MATE-MUBIN
+pip install mate-mubin --index-url https://dl.mthreads.com/repo/api/pypi/pypi/simple
+
+# 3. Expose the package (either editable install without build isolation, or PYTHONPATH=src)
+python -m pip install --no-deps --no-build-isolation -e .
+```
+
+To build a reusable dependency-only MUSA image:
+
+```bash
+docker build -f docker/musa.Dockerfile -t renderformer-musa-env .
+```
+
 ## Data generation
 
 ```bash

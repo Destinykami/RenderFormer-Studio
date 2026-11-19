@@ -76,7 +76,8 @@ inference = [
   "typing-extensions>=4.12,<5",
 ]
 # Training entrypoints. Install the CUDA Conda environment (or DALI manually)
-# for the accelerated H5 loader backend.
+# for the accelerated H5 loader backend. On MUSA, use the `musa` extra or
+# `docker/requirements-musa.txt` instead to avoid overwriting TorchMUSA.
 training = [
   "accelerate>=1.9.0,<2",
   "diffusers>=0.35.0,<1",
@@ -97,6 +98,24 @@ training = [
   "tyro>=0.9.26,<0.10",
   "typing-extensions>=4.12,<5",
   "wandb>=0.21.0,<1",
+]
+# MUSA training and inference extras on top of a preinstalled TorchMUSA image.
+# Intentionally omits torch/torch_musa and pins diffusers<0.36 / hub<1 so
+# preinstalled transformers stays compatible. Install flash_attn_3, mate, and
+# mate-mubin separately from https://dl.mthreads.com/repo/api/pypi/pypi/simple.
+musa = [
+  "diffusers>=0.35.0,<0.36",
+  "huggingface-hub>=0.34.0,<1",
+  "imageio>=2.37.0,<3",
+  "jaxtyping>=0.3.2,<0.4",
+  "lpips>=0.1.4,<0.2",
+  "natsort>=8.4.0,<9",
+  "openexr>=3.3,<4",
+  "pytorch-msssim>=1.0.0,<2",
+  "roma>=1.5.3,<2",
+  "simple-exr==0.0.0",
+  "torchmetrics>=1.7.4,<2",
+  "tyro>=0.9.26,<0.10",
 ]
 [project.scripts]
 renderformer = "renderformer.cli.main:main"
