@@ -33,6 +33,7 @@ Distributed runtime:
   OMP_NUM_THREADS    CPU threads per worker (default: 12)
   PYTHON_BIN         Python executable (default: python)
   WANDB_MODE         Use offline/disabled for unattended runs; online needs login
+  MUDNN_FILTER_INFO  Filter noisy muDNN 3.1.8.1 tce_tme_helper INFO lines (default: 1; set 0 to disable)
 
 Extra Tyro arguments are appended last. Stage identity, dataset location,
 model config, output location, initialization, and strict loading cannot be
@@ -380,5 +381,13 @@ run_training_recipe() {
   cd -- "${REPO_ROOT}"
   printf 'Launching %s (%s stage %s) as run %s\n' \
     "${RECIPE_KEY}" "${FAMILY}" "${STAGE_ORDER}" "${run_id}"
+  if [[ "${MUDNN_FILTER_INFO:-1}" == "1" ]]; then
+    local -a pipe_rc
+    set +e
+    "${command[@]}" 2>&1 | grep -vE --line-buffered 'tce_tme_helper\.muh|musa driver failed|err 1 = invalid argument'
+    pipe_rc=("${PIPESTATUS[@]}")
+    set -e
+    exit "${pipe_rc[0]}"
+  fi
   exec "${command[@]}"
 }
