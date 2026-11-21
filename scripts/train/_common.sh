@@ -386,7 +386,7 @@ run_training_recipe() {
     set +e
     "${command[@]}" 2>&1 \
       | sed -u -E 's/[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:.]+ @0x[0-9a-f]+ INFO:  musa driver failed [^[:space:]]*tce_tme_helper\.muh:[0-9]+: err 1 = invalid argument//g' \
-      | grep -vE --line-buffered 'tce_tme_helper\.muh|musa driver failed|err 1 = invalid argument|^[[:space:]]*(INFO:|invalid argument|: err|1 = invalid argument|=|@0x[0-9a-f]*|[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{2}:[0-9]{2}:[0-9]{2}|[0-9.]+)?[[:space:]]*$'
+      | grep -vE --line-buffered 'tce_tme_helper\.muh|musa driver failed|^([[:space:]]|[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?|@0x[0-9a-f]*|7f[0-9a-f]{8,12}|INFO|err|invalid argument|156|1|=|:|\.[0-9]+|[0-9]{6})*$'
     pipe_rc=("${PIPESTATUS[@]}")
     set -e
     exit "${pipe_rc[0]}"
