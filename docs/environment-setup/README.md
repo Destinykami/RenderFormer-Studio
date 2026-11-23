@@ -61,6 +61,35 @@ To build a reusable dependency-only MUSA image:
 docker build -f docker/musa.Dockerfile -t renderformer-musa-env .
 ```
 
+### Multi-GPU MCCL scheduling (`MUSA_FORCE_SINGLE_QUEUE=1`)
+
+On MTT S5000 GPUs, PyTorch `DistributedDataParallel` runs forward/backward
+compute, activation-checkpointing recomputation, `Memset`, and bucket event
+records on `Stream#0` (`hw=0x...3070`) while concurrently dispatching collective
+`mcclKernel_AllReduce_RING_SIMPLE_Sum_float` kernels on MCCL's internal stream
+(`Stream#3`, `hw=0x...3370`). Under default multi-queue scheduling, hardware
+context switching between the spinning MCCL collective queue and `Stream#0`
+intermittently deadlocks (`XID=1000007`, `ExceptionType: ContextSwitchTimeout`).
+
+`scripts/train/_common.sh` automatically exports `MUSA_FORCE_SINGLE_QUEUE=1`
+when a MUSA runtime is detected and `NPROC_PER_NODE * NNODES > 1`, serializing
+both streams onto one hardware queue (~2–3% step-time overhead, verified stable
+across 15,000 continuous 8-GPU steps). If launching `torchrun` directly outside
+the recipe scripts, set `export MUSA_FORCE_SINGLE_QUEUE=1` explicitly.
+
+Run the repository unit and 8-GPU verification suite with:
+
+```bash
+# Fast launcher guard + .mudmp forensic unit tests + 8-GPU DDP overlap check
+python -m pytest -v -s tests/musa/test_musa_single_queue.py
+
+# Optional unmitigated multi-queue stress probe (unset MUSA_FORCE_SINGLE_QUEUE;
+# streams ~890 MB textures H2D + 80 ms rank jitter on the full 205M model)
+python -m pytest -v -s tests/musa/test_musa_single_queue.py \
+  -k test_reproduce_multi_queue_hang_without_single_queue \
+  --run-negative-repro --negative-steps 1500
+```
+
 ## Data generation
 
 ```bash

@@ -34,6 +34,10 @@ Distributed runtime:
   PYTHON_BIN         Python executable (default: python)
   WANDB_MODE         Use offline/disabled for unattended runs; online needs login
   MUDNN_FILTER_INFO  Filter noisy muDNN 3.1.8.1 tce_tme_helper INFO lines (default: 1; set 0 to disable)
+  MUSA_FORCE_SINGLE_QUEUE
+                     Serialize MUSA streams onto a single hardware queue for
+                     multi-GPU runs to avoid MCCL/compute context-switch deadlocks
+                     (default: 1 when MUSA runtime is detected and world_size > 1)
 
 Extra Tyro arguments are appended last. Stage identity, dataset location,
 model config, output location, initialization, and strict loading cannot be
@@ -165,9 +169,20 @@ _validate_recipe_paths() {
   fi
 }
 
+_is_musa_runtime() {
+  if [[ -n "${MUSA_RUNTIME_DETECT:-}" ]]; then
+    [[ "${MUSA_RUNTIME_DETECT}" == "1" ]]
+    return
+  fi
+  command -v mthreads-gmi >/dev/null 2>&1 || [[ -d /usr/local/musa ]]
+}
+
 _print_command() {
   local -a command=("$@")
   printf 'cd %q\n' "${REPO_ROOT}"
+  if [[ -n "${MUSA_FORCE_SINGLE_QUEUE:-}" ]]; then
+    printf 'MUSA_FORCE_SINGLE_QUEUE=%q ' "${MUSA_FORCE_SINGLE_QUEUE}"
+  fi
   printf 'OMP_NUM_THREADS=%q ' "${OMP_NUM_THREADS:-12}"
   printf '%q ' "${command[@]}"
   printf '\n'
@@ -336,6 +351,9 @@ run_training_recipe() {
 
   local nproc_per_node="${NPROC_PER_NODE:-1}"
   local nnodes="${NNODES:-1}"
+  if (( nproc_per_node * nnodes > 1 )) && _is_musa_runtime; then
+    export MUSA_FORCE_SINGLE_QUEUE="${MUSA_FORCE_SINGLE_QUEUE:-1}"
+  fi
   local -a torchrun_args=(--nproc-per-node "${nproc_per_node}")
   if [[ "${nnodes}" == "1" ]]; then
     torchrun_args=(--standalone "${torchrun_args[@]}")
